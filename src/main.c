@@ -12,10 +12,10 @@
 #include "hardware/timer.h"
 #include "hardware/irq.h"
 
-// Prototype for FFT function implemented in fft.c (prevents implicit declaration)
+// Prototype for FFT function implemented in fft.c (was giving weird errors without)
 void fft_compute_from_capture(const float *capture, int n, float *out);
 
-#define OLED_ADDR 0x3C  // Adjust if your module responds to 0x3D
+#define OLED_ADDR 0x3C 
 
 #define DISP_WIDTH  128
 #define DISP_HEIGHT 64
@@ -43,7 +43,6 @@ int voltage_to_y(float v) {
 
     float normalized = v / 3.3f;          // 0.0 at 0V, 1.0 at 3.3V
     int y = (int)((1.0f - normalized) * (DISP_HEIGHT - 1));
-    // normalized=0 -> y=63 (bottom), normalized=1 -> y=0 (top)
     return y;
 }
 
@@ -73,7 +72,7 @@ static int capture_time_us = 0;
 static float sample_rate_hz  = 0.0f;
 
 void capture_and_show_fft(SSD1309 *d) {
-    // 1) Capture FFT_N samples as fast as possible
+    // Capture FFT_N samples as fast as possible
     uint64_t t_start = time_us_64();            // time start
     for (int i = 0; i < FFT_N; i++) {
         float sum = 0.0f;
@@ -88,7 +87,7 @@ void capture_and_show_fft(SSD1309 *d) {
     uint64_t t_end = time_us_64();              // time end
     capture_time_us = t_end - t_start;          
 
-    // Compute sampling rate (Hz)
+    // Compute sampling rate 
     float capture_time_s = (float)capture_time_us / 1e6f;
     sample_rate_hz = (float)FFT_N / capture_time_s;
 
@@ -96,14 +95,12 @@ void capture_and_show_fft(SSD1309 *d) {
     char line1[17];
 
     snprintf(line1, sizeof(line1), "T=%.2fs Fn=%.0fkHz", capture_time_s, (sample_rate_hz/2)/1000.0f);
-
-    // show on character LCD
     cd_display1(line1);
 
-    // 2) Compute FFT magnitudes using your fft.c
+    // Compute FFT magnitudes using your fft.c
     fft_compute_from_capture(capture_buf, FFT_N, fft_mag);
 
-    // Ignore DC for scaling
+    // compensate for DC (1.65V)
     float max_mag = 0.0f;
     for (int k = 1; k < FFT_N / 2; k++) {
         if (fft_mag[k] > max_mag) max_mag = fft_mag[k];
@@ -120,8 +117,8 @@ void capture_and_show_fft(SSD1309 *d) {
         if (m < 0.0f) m = 0.0f;
         if (m > 1.0f) m = 1.0f;
 
-        // pseudo‑log so weak tones are visible
-        m = sqrtf(m);  // or powf(m, 0.3f)
+        // pseudo‑log so weaker tones are still visible
+        m = sqrtf(m); 
 
         int h = (int)(m * (DISP_HEIGHT - 1));
         for (int y = 0; y < h; y++) {
@@ -143,8 +140,7 @@ void capture_and_show_fft(SSD1309 *d) {
     float dom_freq_hz = (sample_rate_hz * dom_bin) / (float)FFT_N;
 
     int dom_x = (dom_bin * DISP_WIDTH) / (FFT_N / 2);
-    // e.g., draw a small marker at the top row of that column
-    ssd1309_setPixel(d, dom_x, 0, MODE_ADD);
+    ssd1309_setPixel(d, dom_x, 0, MODE_ADD);            // add a dot at the top to show dominant frequency
 
     char f_str[17];
     snprintf(f_str, sizeof(f_str), "F0=%.0fHz", dom_freq_hz);
@@ -152,7 +148,9 @@ void capture_and_show_fft(SSD1309 *d) {
 
     ssd1309_sendBuffer(d);
     sleep_ms(10000);
-    // show on character LCD
+
+    // Clear OLED Char Display to deal with the weird power distortions caused by the display
+    // NEEDED otherwise audio reading stops working 
     cd_display1("                 ");
     cd_display2("                 ");
 }
@@ -178,7 +176,7 @@ void init_dma() {
 }
 
 void init_adc_dma() {
-    //initialize DMA request as well as the FIFO request source, also letting the ADC run in free mode to detect the voltage using the potentiometer
+    //initialize DMA request as well as the FIFO request source
     init_dma();
     adc_fifo_setup(true, true, 1, false, false);
     init_adc_freerun();
@@ -188,52 +186,50 @@ int main() {
     stdio_init_all();
     sleep_ms(100);
 
-    // Oled display init
+    // OLED char display init
     init_chardisp_pins();
     cd_init();
 
-    // I2C + display init
+    // I2C waveform display init
     i2c_init(i2c0, 400000);
     gpio_set_function(4, GPIO_FUNC_I2C);
     gpio_set_function(5, GPIO_FUNC_I2C);
     gpio_pull_up(4);
     gpio_pull_up(5);
-
-    gpio_init(BUTTON_PIN);
-    gpio_set_dir(BUTTON_PIN, GPIO_IN);
-    gpio_pull_down(BUTTON_PIN);   // active-low button to GND
-
     SSD1309 display;
     ssd1309_init(&display, i2c0, 0x3C);
 
+    // Button init
+    gpio_init(BUTTON_PIN);
+    gpio_set_dir(BUTTON_PIN, GPIO_IN);
+    gpio_pull_down(BUTTON_PIN);   // active-high
+
+    // ADC + DMA init
     init_adc_dma();
 
     for (int i = 0; i < DISP_WIDTH; i++) {
-        samples[i] = 1.65f;   // start at mid‑scale
+        samples[i] = 1.65f;   // start at mid‑scale ("0" audio is actually 1.65V)
     }
 
-
-    // Main loop: sample-average + plot
+    // Main loop: live waveform display + button-triggered FFT
     uint update_counter = 0;
-    bool triggered = false;
+    bool triggered = false;         // some reason running the FFT more than once causes issues in adc reading
     while (1) {
-        // Check button (active low)
         if (gpio_get(BUTTON_PIN) == 1 && triggered == false) {
-            // Debounce: simple delay and re-check
             sleep_ms(50);
-            if (gpio_get(BUTTON_PIN) == 1) {
-                // While button held, capture & show FFT once
+            if (gpio_get(BUTTON_PIN) == 1) {                    // very simplistic debounce
+                // capture & show FFT for 10 seconds
                 capture_and_show_fft(&display);
                 triggered = true;
             }
         }
 
-        // ---- Existing waveform code below ----
+        // waveform sampling & display
         float sum = 0.0f;
         int count = 0;
-        for (int i = 0; i < AVG_COUNT; i++) {
+        for (int i = 0; i < AVG_COUNT; i++) {               // average multiple samples to reduce noise & compress waveform for viewing
             float v = ((adc_fifo_out * 3.3f) / 4095.0f);
-            if (v >= MIN_P_VOLTAGE || v <= MIN_N_VOLTAGE) {
+            if (v >= MIN_P_VOLTAGE || v <= MIN_N_VOLTAGE) { // suppress small voltages 
                 sum += v;
             } else {
                 sum += 1.65f;
@@ -245,12 +241,12 @@ int main() {
         samples[sample_index] = v_avg;
         sample_index = (sample_index + 1) % DISP_WIDTH;
 
-        uint update_freq = 128;
+        uint update_freq = 128;                                 // update display every N samples, acts as a "zoom"
         if (++update_counter >= update_freq) {
             update_counter = 0;
             draw_waveform(&display);
 
-            float rms = 0.0f;
+            float rms = 0.0f;                                   // compute and display RMS voltage
             for(int i=0; i<DISP_WIDTH; i++){
                 rms+=((samples[i]-1.65f)*2.0f)*((samples[i]-1.65f)*2.0f);
             }

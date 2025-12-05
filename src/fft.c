@@ -59,7 +59,7 @@ void fft_compute_from_capture(const float *capture_buf, int N, float *fft_mag) {
     static cpx buf_static[FFT_N];
     cpx *buf = buf_static;
 
-    // 1) Convert to volts and compute mean
+    // Convert to volts and compute mean
     float mean = 0.0f;
     for (int i = 0; i < N; i++) {
         float v = capture_buf[i];
@@ -69,7 +69,7 @@ void fft_compute_from_capture(const float *capture_buf, int N, float *fft_mag) {
     }
     mean /= (float)N;
 
-    // 2) Remove DC and apply Hann window
+    // Remove DC and apply Hann window
     for (int i = 0; i < N; i++) {
         float v = buf[i].r - mean;
         float w = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * i / (N - 1)));

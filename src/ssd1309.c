@@ -108,7 +108,7 @@ static int charIndex(char c) {
 
         case '.': return 18;
 
-        // new letters / symbols
+        // extra letters / symbols (for rms readout)
         case 'R': return 19;
         case 'M': return 20;
         case 'S': return 21;
@@ -205,7 +205,7 @@ void ssd1309_drawChar(SSD1309 *d, int x, int y, char c) {
 void ssd1309_drawString(SSD1309 *d, int x, int y, const char *str) {
     while(*str) {
         ssd1309_drawChar(d, x, y, *str++);
-        x += 6; // 5 pixels + 1 spacing
+        x += 6; // 5 pixels + 1 pixel gap
         if(x + 5 >= d->width) {
             x = 0;
             y += 8;
