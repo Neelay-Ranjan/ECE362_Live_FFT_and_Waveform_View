@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "timer.h": "c",
+        "stdlib.h": "c",
+        "irq.h": "c"
+    }
+}
